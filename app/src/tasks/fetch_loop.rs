@@ -193,7 +193,7 @@ pub async fn run_tron_loop(config: AppConfig) -> Result<()> {
     tron::fetch_tron(
         loader.clone(),
         start_block,
-        config.total_tron_txs,
+        Some(config.total_tron_txs),
     )
     .await?;
 

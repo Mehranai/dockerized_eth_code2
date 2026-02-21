@@ -1,7 +1,10 @@
 use anyhow::{Result, anyhow, Context};
 use serde_json::Value;
 use reqwest::Client;
-use std::time::Duration;
+// use std::time::Duration; // benazar Tokio behtare
+use tokio::time::{sleep, Duration};
+
+use reqwest::header::{HeaderMap, HeaderValue};
 
 pub struct TronClient {
     base_url: String,
@@ -9,16 +12,23 @@ pub struct TronClient {
 }
 
 impl TronClient {
-    pub fn new(base_url: &str) -> Self {
-        let http = Client::builder()
-            .timeout(Duration::from_secs(15))
-            .build()
-            .expect("failed to build reqwest client");
+    pub fn new(base_url: String, api_key: Option<String>) -> Self {
+        let mut headers = HeaderMap::new();
 
-        Self {
-            base_url: base_url.trim_end_matches('/').to_string(),
-            http,
+        if let Some(key) = api_key {
+            headers.insert(
+                "TRON-PRO-API-KEY",
+                HeaderValue::from_str(&key).unwrap(),
+            );
         }
+
+        let http = Client::builder()
+            .default_headers(headers)
+            .timeout(Duration::from_secs(20))
+            .build()
+            .unwrap();
+
+        Self { http, base_url }
     }
 
     /// Latest block number
@@ -42,15 +52,37 @@ impl TronClient {
     pub async fn get_block_by_number(&self, block: u64) -> Result<Value> {
         let url = format!("{}/wallet/getblockbynum", self.base_url);
 
-        let resp = self.http
-            .post(&url)
-            .json(&serde_json::json!({ "num": block }))
-            .send()
-            .await
-            .with_context(|| format!("getblockbynum failed for {}", block))?;
+        let mut last_err = None;
 
-        let json: Value = resp.json().await?;
-        Ok(json)
+        for attempt in 1..=3 {
+            let resp = self.http
+                .post(&url)
+                .json(&serde_json::json!({ "num": block }))
+                .send()
+                .await;
+
+            match resp {
+                Ok(r) => {
+                    let json: Value = r.json().await?;
+                    return Ok(json);
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                    let delay = attempt * 2;
+                    eprintln!(
+                        "[TRON] retry getblock {} (attempt {})",
+                        block, attempt
+                    );
+                    sleep(Duration::from_secs(delay)).await;
+                }
+            }
+        }
+
+        Err(anyhow!(
+            "getblockbynum failed after retries for {}: {:?}",
+            block,
+            last_err
+        ))
     }
 
     /// Transaction receipt (logs, status, etc.)

@@ -33,6 +33,7 @@ pub struct AppConfig {
     pub bsc_rpc_url: Option<String>,
     pub btc_api_url: Option<String>,
     pub tron_rpc_url: Option<String>,
+    pub tron_api_key: Option<String>,
     //pub btc_api_url: String,
 
     pub btc_start_block: u64,
@@ -111,8 +112,8 @@ impl AppConfig {
             mode,
             sync_mode,
             clickhouse_url: "http://localhost:8123".into(),
-            clickhouse_user: "default".into(),
-            clickhouse_pass: "".into(),
+            clickhouse_user: "admin".into(),
+            clickhouse_pass: "mehran.admin".into(),
 
             clickhouse_db_eth:"eth_db".into(),
             clickhouse_db_btc:"btc_db".into(),
@@ -124,6 +125,7 @@ impl AppConfig {
             btc_api_url: Some("https://blockstream.info/api".into()),
             bsc_rpc_url: Some("https://rpc.ankr.com/bsc/a4ce905377a7aa94ded62bf6efb50b20acde76159d163f8de77a16ec6237137b".into()),
             tron_rpc_url: Some("https://api.trongrid.io".into()),
+            tron_api_key : Some("737a354f-36da-4255-be84-7d6efacff25a".into()),
 
             btc_start_block: 831000,
             eth_start_block: 90000,
@@ -133,7 +135,7 @@ impl AppConfig {
             total_btc_txs: 500,
             total_eth_txs: 500,
             total_bsc_txs: 500,
-            total_tron_txs: 100,
+            total_tron_txs: 50,
 
             rpc_timeout_seconds: 120,
             rpc_max_concurrency: 10,

@@ -120,7 +120,7 @@ impl LoaderTron {
             .expect("TRON_RPC_HTTP must be set for tron mode");
 
         let tron_client = Arc::new(
-            TronClient::new(tron_rpc_url)
+            TronClient::new(tron_rpc_url.clone(), config.tron_api_key.clone())
         );
 
         let rpc_limiter =

@@ -5,8 +5,8 @@ services:
     volumes:
       - clickhouse_data:/var/lib/clickhouse
     ports:
-      - "18123:18123"
-      - "9001:9001"
+      - "8123:8123"
+      - "9000:9000"
     environment:
       CLICKHOUSE_USER: admin
       CLICKHOUSE_PASSWORD: mehran.admin

@@ -3,6 +3,8 @@ use crate::models::wallet::WalletRow;
 use crate::models::owner::OwnerRow;
 use crate::models::transaction::TransactionRow;
 use crate::models::token_metadata::TokenMetadataRow;
+use crate::models::contract_call::ContractCallRow;
+use crate::models::money_flow::MoneyFlowRow;
 
 use clickhouse::Client;
 use std::sync::Arc;
@@ -170,6 +172,7 @@ pub fn generate_person_id() -> String {
 // Balance of tokens section
 
 // TOKEN TRANSFERS (ONLY CANONICAL INSERT)
+// Start of Ethereum section
 
 pub async fn save_token_transfer(
     clickhouse: Arc<Client>,
@@ -199,6 +202,7 @@ pub async fn save_token_metadata(
 
     Ok(())
 }
+// End of Ethereum section
 
 // SYNC STATE
 
@@ -220,6 +224,35 @@ pub async fn save_sync_state(
     };
 
     let mut insert = clickhouse.insert::<SyncStateRow>("sync_state").await?;
+    insert.write(&row).await?;
+    insert.end().await?;
+
+    Ok(())
+}
+
+// Tron Section
+pub async fn save_contract_call(
+    clickhouse: Arc<Client>,
+    row: ContractCallRow,
+) -> Result<()> {
+    let mut insert = clickhouse
+        .insert::<ContractCallRow>("contract_calls")
+        .await?;
+
+    insert.write(&row).await?;
+    insert.end().await?;
+
+    Ok(())
+}
+
+pub async fn save_money_flow(
+    clickhouse: Arc<Client>,
+    row: MoneyFlowRow,
+) -> Result<()> {
+    let mut insert = clickhouse
+        .insert::<MoneyFlowRow>("money_flows")
+        .await?;
+
     insert.write(&row).await?;
     insert.end().await?;
 

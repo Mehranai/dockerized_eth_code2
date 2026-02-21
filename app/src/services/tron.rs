@@ -1,423 +1,194 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Result, Context};
 use futures::stream::{FuturesUnordered, StreamExt};
-use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-use crate::models::transaction::Sensivity;
 use crate::services::loader::LoaderTron;
 use crate::services::progress::{
-    save_sync_state,
     save_tx,
     save_wallet,
+    save_sync_state,
     save_token_transfer,
 };
+use crate::models::transaction::Sensivity;
 use crate::models::token_transfer::TokenTransferRow;
 
-// ─── TRX sensitivity (1 TRX = 1_000_000 SUN) ────────────────────────────────
+const TRC20_TRANSFER_TOPIC: &str =
+    "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 
-fn calc_sensivity_trx(sun: u64) -> Sensivity {
-    let trx = sun as f64 / 1_000_000.0;
+/// ------------------------------------------------
+/// Utils
+/// ------------------------------------------------
 
-    if trx > 100_000.0 {
+fn calc_sensivity_trx(amount_sun: i64) -> Sensivity {
+    let trx = amount_sun as f64 / 1_000_000.0;
+
+    if trx >= 1_000_000.0 {
         Sensivity::Red
-    } else if trx > 10_000.0 {
+    } else if trx >= 100_000.0 {
         Sensivity::Yellow
     } else {
         Sensivity::Green
     }
 }
 
-// ─── Tron REST API structs ────────────────────────────────────────────────────
+fn parse_trx_transfer(tx: &Value) -> Option<(String, String, i64)> {
+    let contract = tx["raw_data"]["contract"].get(0)?;
+    let value = &contract["parameter"]["value"];
 
-#[derive(Debug, Deserialize)]
-struct TronBlock {
-    #[serde(rename = "blockID")]
-    block_id: String,
-
-    #[serde(rename = "block_header")]
-    block_header: TronBlockHeader,
-
-    #[serde(default)]
-    transactions: Vec<TronTx>,
+    Some((
+        value["owner_address"].as_str()?.to_string(),
+        value["to_address"].as_str()?.to_string(),
+        value["amount"].as_i64()?,
+    ))
 }
 
-#[derive(Debug, Deserialize)]
-struct TronBlockHeader {
-    raw_data: TronBlockRaw,
-}
-
-#[derive(Debug, Deserialize)]
-struct TronBlockRaw {
-    number: u64,
-    timestamp: u64,
-}
-
-#[derive(Debug, Deserialize)]
-struct TronTx {
-    txID: String,
-    ret: Option<Vec<TronRet>>,
-    raw_data: TronTxRaw,
-}
-
-#[derive(Debug, Deserialize)]
-struct TronRet {
-    contractRet: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TronTxRaw {
-    contract: Vec<TronContract>,
-    timestamp: Option<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TronContract {
-    #[serde(rename = "type")]
-    contract_type: String,
-
-    parameter: TronContractParameter,
-}
-
-#[derive(Debug, Deserialize)]
-struct TronContractParameter {
-    value: serde_json::Value,
-}
-
-// TRC20 Transfer event log
-#[derive(Debug, Deserialize)]
-struct TronTrc20Transfer {
-    transaction_id: String,
-    block_timestamp: u64,
-    token_info: TronTokenInfo,
-    from: String,
-    to: String,
-    value: String,
-    token_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TronTokenInfo {
-    address: String,
-    name: Option<String>,
-    symbol: Option<String>,
-    decimals: Option<u8>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TronTrc20Response {
-    data: Vec<TronTrc20Transfer>,
-    #[serde(default)]
-    meta: Option<serde_json::Value>,
-}
-
-// ─── API Helpers ──────────────────────────────────────────────────────────────
-
-async fn get_block(
-    client: &reqwest::Client,
-    base_url: &str,
-    block_number: u64,
-) -> Result<Option<TronBlock>> {
-    let url = format!("{}/wallet/getblockbynum", base_url);
-
-    let body = serde_json::json!({ "num": block_number });
-
-    let resp = client.post(&url).json(&body).send().await?;
-
-    if !resp.status().is_success() {
-        return Ok(None);
-    }
-
-    let block: TronBlock = resp.json().await?;
-    Ok(Some(block))
-}
-
-async fn get_trc20_transfers_for_tx(
-    client: &reqwest::Client,
-    base_url: &str,
+fn parse_trc20_transfers(
     tx_hash: &str,
-) -> Result<Vec<TronTrc20Transfer>> {
-    let url = format!(
-        "{}/v1/transactions/{}/events",
-        base_url, tx_hash
-    );
+    tx_info: &Value,
+    block_number: u64,
+) -> Vec<TokenTransferRow> {
 
-    let resp = client.get(&url).send().await?;
+    let mut rows = Vec::new();
 
-    if !resp.status().is_success() {
-        return Ok(vec![]);
+    let logs = match tx_info["log"].as_array() {
+        Some(l) => l,
+        None => return rows,
+    };
+
+    for (idx, log) in logs.iter().enumerate() {
+        let topics = match log["topics"].as_array() {
+            Some(t) if t.len() == 3 => t,
+            _ => continue,
+        };
+
+        if topics[0].as_str() != Some(TRC20_TRANSFER_TOPIC) {
+            continue;
+        }
+
+        let amount = i64::from_str_radix(
+            log["data"].as_str().unwrap_or("0"),
+            16,
+        )
+        .unwrap_or(0);
+
+        rows.push(TokenTransferRow {
+            tx_hash: tx_hash.to_string(),
+            block_number,
+            log_index: idx as u32,
+            token_address: log["address"].as_str().unwrap_or_default().to_string(),
+            from_addr: topics[1].as_str().unwrap_or_default().to_string(),
+            to_addr: topics[2].as_str().unwrap_or_default().to_string(),
+            amount: amount.to_string(),
+        });
     }
 
-    let data: TronTrc20Response = resp.json().await?;
-    Ok(data.data)
+    rows
 }
 
-async fn get_account_info(
-    client: &reqwest::Client,
-    base_url: &str,
-    address: &str,
-) -> Result<(u64, bool)> {
-    let url = format!("{}/wallet/getaccount", base_url);
-    let body = serde_json::json!({ "address": address, "visible": true });
+/// ------------------------------------------------
+/// TX processing
+/// ------------------------------------------------
 
-    let resp = client.post(&url).json(&body).send().await?;
-
-    if !resp.status().is_success() {
-        return Ok((0, false));
-    }
-
-    let data: serde_json::Value = resp.json().await?;
-
-    let balance = data["balance"].as_u64().unwrap_or(0);
-    // اگه code داشت یعنی smart contract هست
-    let is_contract = data["contract_resource"].is_object()
-        || data.get("contract").is_some();
-
-    Ok((balance, is_contract))
-}
-
-// ─── Save Wallet ──────────────────────────────────────────────────────────────
-
-async fn save_wallet_tron(
-    client: Arc<reqwest::Client>,
-    clickhouse: Arc<clickhouse::Client>,
-    limiter: Arc<tokio::sync::Semaphore>,
-    base_url: Arc<String>,
-    address: String,
+async fn process_tron_tx(
+    loader: Arc<LoaderTron>,
+    tx: Value,
+    block_number: u64,
 ) -> Result<()> {
-    if address.is_empty() || address == "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb" {
-        // آدرس zero در Tron
-        return Ok(());
+
+    let tx_hash = tx["txID"]
+        .as_str()
+        .context("missing txID")?
+        .to_string();
+
+    // ---------- TRX ----------
+    if let Some((from, to, amount)) = parse_trx_transfer(&tx) {
+        save_tx(
+            loader.clickhouse.clone(),
+            tx_hash.clone(),
+            block_number,
+            from.clone(),
+            to.clone(),
+            amount.to_string(),
+            calc_sensivity_trx(amount) as u8,
+        ).await?;
+
+        save_wallet(loader.clickhouse.clone(), &from, "0".into(), 0, "wallet".into()).await?;
+        save_wallet(loader.clickhouse.clone(), &to, "0".into(), 0, "wallet".into()).await?;
     }
 
-    let (balance, is_contract) = {
-        let _permit = limiter.acquire().await?;
-        get_account_info(&client, &base_url, &address).await?
-    };
+    // ---------- TRC20 ----------
+    let tx_info = loader
+        .tron_client
+        .get_transaction_info(&tx_hash)
+        .await
+        .with_context(|| format!("failed tx info {}", tx_hash))?;
 
-    let wallet_type = if is_contract {
-        "smart_contract".to_string()
-    } else {
-        "wallet".to_string()
-    };
-
-    save_wallet(
-        clickhouse,
-        &address,
-        balance.to_string(),
-        0, // Tron از nonce استفاده نمی‌کند
-        wallet_type,
-    )
-    .await?;
+    for row in parse_trc20_transfers(&tx_hash, &tx_info, block_number) {
+        save_token_transfer(loader.clickhouse.clone(), row).await?;
+    }
 
     Ok(())
 }
 
-// ─── Process Transaction ──────────────────────────────────────────────────────
+/// ------------------------------------------------
+/// Main loop (ETH‑style)
+/// ------------------------------------------------
 
-async fn process_tx_tron(
-    client: Arc<reqwest::Client>,
-    clickhouse: Arc<clickhouse::Client>,
-    limiter: Arc<tokio::sync::Semaphore>,
-    base_url: Arc<String>,
-    tx: TronTx,
-    block_number: u64,
-) -> Result<Vec<String>> {
-    let tx_hash = tx.txID.clone();
-
-    // استخراج from/to/value از contract اول
-    let contract = match tx.raw_data.contract.first() {
-        Some(c) => c,
-        None => return Ok(vec![]),
-    };
-
-    let val = &contract.parameter.value;
-
-    let from_addr = val["owner_address"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-
-    let to_addr = val["to_address"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-
-    let amount_sun = val["amount"].as_u64().unwrap_or(0);
-
-    save_tx(
-        clickhouse.clone(),
-        tx_hash.clone(),
-        block_number,
-        from_addr.clone(),
-        to_addr.clone(),
-        amount_sun.to_string(),
-        calc_sensivity_trx(amount_sun) as u8,
-    )
-    .await?;
-
-    // TRC20 transfers
-    let trc20_transfers = {
-        let _permit = limiter.acquire().await?;
-        get_trc20_transfers_for_tx(&client, &base_url, &tx_hash).await?
-    };
-
-    let mut discovered_tokens: Vec<String> = vec![];
-
-    for (log_index, transfer) in trc20_transfers.iter().enumerate() {
-        let token_address = transfer.token_info.address.clone();
-        discovered_tokens.push(token_address.clone());
-
-        save_token_transfer(
-            clickhouse.clone(),
-            TokenTransferRow {
-                tx_hash: tx_hash.clone(),
-                block_number,
-                log_index: log_index as u32,
-                token_address,
-                from_addr: transfer.from.clone(),
-                to_addr: transfer.to.clone(),
-                amount: transfer.value.clone(),
-            },
-        )
-        .await?;
-    }
-
-    // ذخیره wallet ها
-    if !from_addr.is_empty() {
-        save_wallet_tron(
-            client.clone(),
-            clickhouse.clone(),
-            limiter.clone(),
-            base_url.clone(),
-            from_addr,
-        )
-        .await?;
-    }
-
-    if !to_addr.is_empty() {
-        save_wallet_tron(
-            client.clone(),
-            clickhouse.clone(),
-            limiter.clone(),
-            base_url.clone(),
-            to_addr,
-        )
-        .await?;
-    }
-
-    Ok(discovered_tokens)
-}
-
-// ─── Main Fetch Function ──────────────────────────────────────────────────────
-// بررسی شود این بخش . باید از یه سیستم برای دریافت client استفاده شود
 pub async fn fetch_tron(
     loader: Arc<LoaderTron>,
     start_block: u64,
-    total_txs: u64,
+    max_txs: u64,
 ) -> Result<()> {
-    let client = loader.http_client.clone();
-    let clickhouse = loader.clickhouse.clone();
-    let limiter = loader.rpc_limiter.clone();
-    let base_url = loader.base_url.clone();
 
-    // بلاک آخر رو از API بگیر
-    let latest_block = {
-        let url = format!("{}/wallet/getnowblock", base_url);
-        let resp = client.post(&url).send().await?;
-        let data: TronBlock = resp.json().await?;
-        data.block_header.raw_data.number
-    };
+    let latest = loader.tron_client.get_block_number().await?;
+    let mut current = start_block;
+    let mut processed = 0_u64;
 
-    println!("TRON Latest Block: {}", latest_block);
+    println!("[TRON] start {} → {}", start_block, latest);
 
-    let mut tx_count: u64 = 0;
-    let mut last_synced_block: u64 = start_block;
-    let mut current_block = start_block;
+    while current <= latest && processed < max_txs {
+        let block = loader
+            .tron_client
+            .get_block_by_number(current)
+            .await
+            .with_context(|| format!("block {}", current))?;
 
-    while current_block <= latest_block {
-        if tx_count >= total_txs {
-            break;
-        }
+        let txs = block["transactions"].as_array();
 
-        let block_opt = {
-            let _permit = limiter.acquire().await?;
-            get_block(&client, &base_url, current_block).await?
-        };
-
-        let Some(block) = block_opt else {
-            current_block += 1;
-            continue;
-        };
-
-        let txs = block.transactions;
-
-        if txs.is_empty() {
-            println!(
-                "[TRON] Block {} has 0 txs (valid empty block)",
-                current_block
-            );
-
-            last_synced_block = current_block;
-            save_sync_state(clickhouse.clone(), "tron", last_synced_block).await?;
-
-            current_block += 1;
+        if txs.is_none() || txs.unwrap().is_empty() {
+            save_sync_state(loader.clickhouse.clone(), "tron", current).await?;
+            current += 1;
             continue;
         }
 
         let mut tasks = FuturesUnordered::new();
-        let mut discovered_tokens_all: Vec<String> = vec![];
-        let mut fully_processed_block = true;
 
-        for tx in txs {
-            if tx_count >= total_txs {
-                fully_processed_block = false;
+        for tx in txs.unwrap() {
+            if processed >= max_txs {
                 break;
             }
 
-            let client = client.clone();
-            let clickhouse = clickhouse.clone();
-            let limiter = limiter.clone();
-            let base_url = Arc::new(base_url.clone());
-            let block_number = current_block;
+            let loader = loader.clone();
+            let tx = tx.clone();
 
             tasks.push(tokio::spawn(async move {
-                process_tx_tron(client, clickhouse, limiter, base_url, tx, block_number).await
+                process_tron_tx(loader, tx, current).await
             }));
 
-            tx_count += 1;
-            println!("[TRON] --> Queued tx #{}", tx_count);
+            processed += 1;
         }
 
         while let Some(res) = tasks.next().await {
-            let tokens = res??;
-            discovered_tokens_all.extend(tokens);
+            res??;
         }
 
-        // Token metadata (اگه داری token_metadata_worker برای Tron هم بسازی)
-        // tron_token_metadata_worker::process_new_tokens(...).await?;
+        save_sync_state(loader.clickhouse.clone(), "tron", current).await?;
+        println!("[TRON] block {} synced | txs {}", current, processed);
 
-        if fully_processed_block {
-            last_synced_block = current_block;
-
-            save_sync_state(clickhouse.clone(), "tron", last_synced_block).await?;
-
-            println!(
-                "TRON synced block {} | total tx processed {}",
-                last_synced_block, tx_count
-            );
-        } else {
-            println!(
-                "TRON stopped mid-block {} (tx limit reached) | total tx processed {}",
-                current_block, tx_count
-            );
-            break;
-        }
-
-        current_block += 1;
+        current += 1;
     }
-
-    save_sync_state(clickhouse.clone(), "tron", last_synced_block).await?;
 
     Ok(())
 }

@@ -5,6 +5,7 @@ pub enum AppMode {
     Eth,
     Btc,
     Bsc,
+    Tron,
 }
 
 #[derive(Debug, Clone)]
@@ -104,14 +105,14 @@ pub struct AppConfig {
 // Test
 impl AppConfig {
     pub fn from_env() -> Self {
-        let mode = AppMode::Eth;
+        let mode = AppMode::Tron;
         let sync_mode: SyncMode = SyncMode::Backfill;
         Self {
             mode,
             sync_mode,
             clickhouse_url: "http://localhost:8123".into(),
-            clickhouse_user: "admin".into(),
-            clickhouse_pass: "mehran.admin".into(),
+            clickhouse_user: "default".into(),
+            clickhouse_pass: "".into(),
 
             clickhouse_db_eth:"eth_db".into(),
             clickhouse_db_btc:"btc_db".into(),
@@ -122,7 +123,7 @@ impl AppConfig {
             eth_rpc_url: Some("https://rpc.ankr.com/eth/7e8ca9022eeddb398b8068455b3e3cabdafdf97d2d7ff977d85fb7915c192158".into()),
             btc_api_url: Some("https://blockstream.info/api".into()),
             bsc_rpc_url: Some("https://rpc.ankr.com/bsc/a4ce905377a7aa94ded62bf6efb50b20acde76159d163f8de77a16ec6237137b".into()),
-            tron_rpc_url: Some("link for tron".into()),
+            tron_rpc_url: Some("https://api.trongrid.io".into()),
 
             btc_start_block: 831000,
             eth_start_block: 90000,
@@ -132,7 +133,7 @@ impl AppConfig {
             total_btc_txs: 500,
             total_eth_txs: 500,
             total_bsc_txs: 500,
-            total_tron_txs: 500,
+            total_tron_txs: 100,
 
             rpc_timeout_seconds: 120,
             rpc_max_concurrency: 10,

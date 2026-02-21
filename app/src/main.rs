@@ -5,7 +5,8 @@ use arz_axum_for_services::config::{AppConfig, AppMode};
 use arz_axum_for_services::tasks::fetch_loop::{
     run_btc_loop,
     run_eth_loop,
-    run_bsc_loop
+    run_bsc_loop,
+    run_tron_loop
 };
 
 #[tokio::main]
@@ -24,6 +25,9 @@ async fn main() -> Result<()> {
         }
         AppMode::Bsc => {
             run_bsc_loop(config).await?;
+        },
+        AppMode::Tron => {
+            run_tron_loop(config).await?;
         }
     }
 

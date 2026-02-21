@@ -4,11 +4,11 @@ CREATE DATABASE IF NOT EXISTS tron_db;
 -- WALLET INFO
 ---------------------------------------------------------
 CREATE TABLE IF NOT EXISTS tron_db.wallet_info (
-    address     String,
-    balance     String,
-    nonce       UInt64,
-    type        String,
-    person_id   String,
+    address String,
+    balance String,
+    nonce UInt64,
+    type String,
+    person_id String,
     inserted_at DateTime DEFAULT now()
 ) ENGINE = ReplacingMergeTree(inserted_at)
 ORDER BY address;
@@ -17,13 +17,13 @@ ORDER BY address;
 -- TRANSACTIONS
 ---------------------------------------------------------
 CREATE TABLE IF NOT EXISTS tron_db.transactions (
-    hash         String,
+    hash String,
     block_number UInt64,
-    from_addr    String,
-    to_addr      String,
-    value        String,
-    sensivity    UInt8,
-    inserted_at  DateTime DEFAULT now()
+    from_addr String,
+    to_addr String,
+    value String,
+    sensivity UInt8,
+    inserted_at DateTime DEFAULT now()
 ) ENGINE = ReplacingMergeTree(inserted_at)
 ORDER BY (block_number, hash);
 
@@ -31,9 +31,9 @@ ORDER BY (block_number, hash);
 -- OWNER INFO
 ---------------------------------------------------------
 CREATE TABLE IF NOT EXISTS tron_db.owner_info (
-    address     String,
+    address String,
     person_name String,
-    person_id   String,
+    person_id String,
     personal_id UInt16,
     inserted_at DateTime DEFAULT now()
 ) ENGINE = ReplacingMergeTree(inserted_at)
@@ -43,39 +43,39 @@ ORDER BY address;
 -- ADDRESS TAGS
 ---------------------------------------------------------
 CREATE TABLE IF NOT EXISTS tron_db.address_tags (
-    address    String,
-    tag        String,
+    address String,
+    tag String,
     created_at DateTime DEFAULT now()
 ) ENGINE = MergeTree()
 ORDER BY (address, tag);
 
 ---------------------------------------------------------
--- TOKEN TRANSFERS (TRC20)
+-- TOKEN TRANSFERS (CANONICAL TABLE)
 ---------------------------------------------------------
 CREATE TABLE IF NOT EXISTS tron_db.token_transfers (
-    tx_hash       String,
-    block_number  UInt64,
-    log_index     UInt32,
+    tx_hash String,
+    block_number UInt64,
+    log_index UInt32,
     token_address String,
-    from_addr     String,
-    to_addr       String,
-    amount        String,
-    inserted_at   DateTime DEFAULT now()
+    from_addr String,
+    to_addr String,
+    amount String,
+    inserted_at DateTime DEFAULT now()
 ) ENGINE = ReplacingMergeTree(inserted_at)
 ORDER BY (tx_hash, log_index);
 
 ---------------------------------------------------------
--- ADDRESS TOKEN DELTA
+-- TOKEN DELTA (CANONICAL TABLE)
 ---------------------------------------------------------
 CREATE TABLE IF NOT EXISTS tron_db.address_token_delta (
-    tx_hash       String,
-    log_index     UInt32,
-    direction     UInt8,
-    address       String,
+    tx_hash String,
+    log_index UInt32,
+    direction UInt8,     -- 0 = outgoing, 1 = incoming
+    address String,
     token_address String,
-    delta         Int256,
-    block_number  UInt64,
-    inserted_at   DateTime DEFAULT now()
+    delta Int256,
+    block_number UInt64,
+    inserted_at DateTime DEFAULT now()
 ) ENGINE = ReplacingMergeTree(inserted_at)
 ORDER BY (tx_hash, log_index, direction);
 
@@ -88,13 +88,13 @@ AS
 SELECT
     tx_hash,
     log_index,
-    0                   AS direction,
-    from_addr           AS address,
+    0 AS direction,
+    from_addr AS address,
     token_address,
-    -toInt256(amount)   AS delta,
+    -toInt256(amount) AS delta,
     block_number
 FROM tron_db.token_transfers
-WHERE from_addr != 'T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb';
+WHERE from_addr != '0x0000000000000000000000000000000000000000';
 
 ---------------------------------------------------------
 -- MV: DELTA TO (RECEIVER)
@@ -105,21 +105,21 @@ AS
 SELECT
     tx_hash,
     log_index,
-    1                  AS direction,
-    to_addr            AS address,
+    1 AS direction,
+    to_addr AS address,
     token_address,
-    toInt256(amount)   AS delta,
+    toInt256(amount) AS delta,
     block_number
 FROM tron_db.token_transfers
-WHERE to_addr != 'T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb';
+WHERE to_addr != '0x0000000000000000000000000000000000000000';
 
 ---------------------------------------------------------
--- FINAL TOKEN BALANCE
+-- FINAL TOKEN BALANCE TABLE
 ---------------------------------------------------------
 CREATE TABLE IF NOT EXISTS tron_db.address_token_balance (
-    address       String,
+    address String,
     token_address String,
-    balance       Int256
+    balance Int256
 ) ENGINE = SummingMergeTree()
 ORDER BY (address, token_address);
 
@@ -136,17 +136,17 @@ SELECT
 FROM tron_db.address_token_delta;
 
 ---------------------------------------------------------
--- TOKEN METADATA (TRC20)
+-- TOKEN META DETAILS
 ---------------------------------------------------------
 CREATE TABLE IF NOT EXISTS tron_db.token_metadata (
     token_address String,
-    name          String,
-    symbol        String,
-    decimals      UInt8,
-    total_supply  String,
-    is_verified   UInt8,
-    created_at    DateTime DEFAULT now(),
-    updated_at    DateTime DEFAULT now()
+    name String,
+    symbol String,
+    decimals UInt8,
+    total_supply String,
+    is_verified UInt8,
+    created_at DateTime DEFAULT now(),
+    updated_at DateTime DEFAULT now()
 ) ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY token_address;
 
@@ -154,8 +154,8 @@ ORDER BY token_address;
 -- SYNC STATE
 ---------------------------------------------------------
 CREATE TABLE IF NOT EXISTS tron_db.sync_state (
-    chain             String,
+    chain String,
     last_synced_block UInt64,
-    updated_at        DateTime DEFAULT now()
+    updated_at DateTime DEFAULT now()
 ) ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY chain;

@@ -170,6 +170,9 @@ pub async fn run_tron_loop(config: AppConfig) -> Result<()> {
         .with_password(&config.clickhouse_pass);
 
     init_tron_db(&admin_client).await?;
+    
+    // Check Error Connect to clickhouse
+    println!("Passed clickhouse!!");
 
     let last_synced =
         get_last_synced_block(&loader.clickhouse, "tron").await?;
